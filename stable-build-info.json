@@ -1,6 +1,10 @@
 {
-  "version": "",
-  "source_sha": "",
-  "built_at": "",
-  "run_id": ""
+  "version": "1.14.0-Erics",
+  "source_sha": "fc2869fe827566214ece7373bab43dbb05bc49c8",
+  "built_at": "2026-09-07T11:12:08Z",
+  "run_id": "34114512270",
+  "core_base_version": "1.14.0-Erics",
+  "core_version": "1.14.0-Erics-fc2869fe8",
+  "source_repository": "ericsyj/sing-box",
+  "source_ref": "main-next-pro"
 }
