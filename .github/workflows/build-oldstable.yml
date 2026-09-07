@@ -4,10 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag or temporary tag when building from commit hash (e.g. 1.13.0-rc.4)'
+        description: 'Release and GUI version (e.g. 1.13.0-reF1nd)'
         required: true
-      commit_hash:
-        description: 'Optional commit hash to build from (overrides version tag)'
+      core_base_version:
+        description: 'Core base version used before the source commit suffix (e.g. 1.13.0)'
+        required: true
+      core_source:
+        description: 'Optional core source: owner/repo [branch, tag, or commit]'
+        required: false
+        default: ''
+      android_gui_source:
+        description: 'Optional Android GUI source: owner/repo [branch, tag, or commit]'
         required: false
         default: ''
       build_cli:
@@ -31,32 +38,96 @@ env:
 
 jobs:
   resolve_source:
-    name: Resolve sing-box source
+    name: Resolve source repositories
     runs-on: ubuntu-latest
     outputs:
       source_sha: ${{ steps.source.outputs.source_sha }}
+      core_version: ${{ steps.source.outputs.core_version }}
+      core_repository: ${{ steps.sources.outputs.core_repository }}
+      core_ref: ${{ steps.sources.outputs.core_ref }}
+      android_gui_repository: ${{ steps.sources.outputs.android_gui_repository }}
+      android_gui_ref: ${{ steps.sources.outputs.android_gui_ref }}
+      android_gui_sha: ${{ steps.source.outputs.android_gui_sha }}
     steps:
+      - name: Parse source selections
+        id: sources
+        shell: bash
+        env:
+          CORE_SOURCE: ${{ inputs.core_source }}
+          ANDROID_GUI_SOURCE: ${{ inputs.android_gui_source }}
+        run: |
+          set -euo pipefail
+          parse_source() {
+            local prefix="$1"
+            local value="$2"
+            local default_repository="$3"
+            local default_ref="$4"
+            local parts=()
+            read -r -a parts <<< "$value" || true
+            if (( ${#parts[@]} > 2 )); then
+              echo "invalid ${prefix} source: expected 'owner/repo [ref]'" >&2
+              exit 1
+            fi
+            local repository="${parts[0]:-$default_repository}"
+            local ref="${parts[1]:-$default_ref}"
+            if [[ ! "$repository" =~ ^[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+$ ]]; then
+              echo "invalid ${prefix} repository: $repository" >&2
+              exit 1
+            fi
+            if [[ ! "$ref" =~ ^[0-9A-Fa-f]{7,40}$ ]] && ! git check-ref-format --branch "$ref" >/dev/null 2>&1; then
+              echo "invalid ${prefix} ref: $ref" >&2
+              exit 1
+            fi
+            {
+              echo "${prefix}_repository=$repository"
+              echo "${prefix}_ref=$ref"
+            } >> "$GITHUB_OUTPUT"
+          }
+          parse_source core "$CORE_SOURCE" 'reF1nd/sing-box' 'reF1nd-oldstable'
+          parse_source android_gui "$ANDROID_GUI_SOURCE" 'reF1nd/sing-box-for-android' 'reF1nd-oldstable'
+
       - name: Checkout sing-box
         uses: actions/checkout@v6
         with:
-          repository: reF1nd/sing-box
-          ref: ${{ inputs.commit_hash != '' && inputs.commit_hash || format('v{0}', inputs.version) }}
+          repository: ${{ steps.sources.outputs.core_repository }}
+          ref: ${{ steps.sources.outputs.core_ref }}
           path: sing-box
           fetch-depth: 1
 
-      - name: Resolve source commit
+      - name: Checkout Android GUI source
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ steps.sources.outputs.android_gui_repository }}
+          ref: ${{ steps.sources.outputs.android_gui_ref }}
+          path: android-gui-source
+          fetch-depth: 1
+
+      - name: Resolve source commits and core version
         id: source
         run: |
           set -euo pipefail
-          if [[ ! "$INPUT_VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z.+-]*$ ]]; then
-            echo "invalid version: $INPUT_VERSION" >&2
+          if [[ ! "$RELEASE_VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z.+-]*$ ]]; then
+            echo "invalid release version: $RELEASE_VERSION" >&2
+            exit 1
+          fi
+          if [[ ! "$CORE_BASE_VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z.+-]*$ ]]; then
+            echo "invalid core base version: $CORE_BASE_VERSION" >&2
             exit 1
           fi
           source_sha=$(git -C sing-box rev-parse HEAD)
-          echo "source_sha=${source_sha}" >> "$GITHUB_OUTPUT"
-          echo "Resolved sing-box source: ${source_sha}"
+          android_gui_sha=$(git -C android-gui-source rev-parse HEAD)
+          core_version="${CORE_BASE_VERSION}-${source_sha:0:9}"
+          {
+            echo "source_sha=${source_sha}"
+            echo "android_gui_sha=${android_gui_sha}"
+            echo "core_version=${core_version}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Resolved core at ${source_sha}"
+          echo "Resolved Android GUI at ${android_gui_sha}"
+          echo "Core version: ${core_version}"
         env:
-          INPUT_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          CORE_BASE_VERSION: ${{ inputs.core_base_version }}
 
   build_cli:
     if: ${{ github.event.inputs.build_cli == 'true' }}
@@ -310,7 +381,7 @@ jobs:
       - name: Checkout sing-box
         uses: actions/checkout@v6
         with:
-          repository: reF1nd/sing-box
+          repository: ${{ needs.resolve_source.outputs.core_repository }}
           ref: ${{ needs.resolve_source.outputs.source_sha }}
           path: sing-box
           fetch-depth: 1
@@ -320,7 +391,7 @@ jobs:
         run: |
           set -xeuo pipefail
           cd sing-box
-          TAG="v${{ github.event.inputs.version }}"
+          TAG="v${{ needs.resolve_source.outputs.core_version }}"
           git tag -f "${TAG}" "${{ needs.resolve_source.outputs.source_sha }}"
 
       - name: Cache Go for macOS 10.13
@@ -477,7 +548,7 @@ jobs:
           fi
           go build -v -trimpath -o "dist/${{ matrix.binary }}" \
             -tags "${{ steps.env.outputs.tags }}" \
-            -ldflags "-X github.com/sagernet/sing-box/constant.Version=${{ github.event.inputs.version }} ${LDFLAGS_SHARED} -s -w -buildid=" \
+            -ldflags "-X github.com/sagernet/sing-box/constant.Version=${{ needs.resolve_source.outputs.core_version }} ${LDFLAGS_SHARED} -s -w -buildid=" \
             ./cmd/sing-box
         env:
           LDFLAGS_SHARED: ${{ steps.env.outputs.ldflags }}
@@ -519,7 +590,7 @@ jobs:
         shell: bash
         run: |
           cd sing-box/dist
-          DIR_NAME="sing-box-${{ github.event.inputs.version }}-linux-${{ matrix.arch }}${{ steps.env.outputs.archive_suffix }}"
+          DIR_NAME="sing-box-${{ needs.resolve_source.outputs.core_version }}-linux-${{ matrix.arch }}${{ steps.env.outputs.archive_suffix }}"
           mkdir -p "$DIR_NAME"
           cp ../LICENSE "$DIR_NAME/"
           cp sing-box "$DIR_NAME/"
@@ -535,7 +606,7 @@ jobs:
         shell: pwsh
         run: |
           cd sing-box/dist
-          $DIR_NAME = "sing-box-${{ github.event.inputs.version }}-windows-${{ matrix.arch }}"
+          $DIR_NAME = "sing-box-${{ needs.resolve_source.outputs.core_version }}-windows-${{ matrix.arch }}"
           mkdir "$DIR_NAME"
           Copy-Item ../LICENSE "$DIR_NAME/"
           Copy-Item sing-box.exe "$DIR_NAME/"
@@ -551,7 +622,7 @@ jobs:
         if: matrix.platform == 'darwin'
         run: |
           cd sing-box/dist
-          DIR_NAME="sing-box-${{ github.event.inputs.version }}-darwin-${{ matrix.arch }}"
+          DIR_NAME="sing-box-${{ needs.resolve_source.outputs.core_version }}-darwin-${{ matrix.arch }}"
           if [[ -n "${{ matrix.legacy_name }}" ]]; then
             DIR_NAME="${DIR_NAME}-legacy-${{ matrix.legacy_name }}"
           fi
@@ -565,7 +636,7 @@ jobs:
         if: matrix.platform == 'android'
         run: |
           cd sing-box/dist
-          DIR_NAME="sing-box-${{ github.event.inputs.version }}-android-${{ matrix.arch }}"
+          DIR_NAME="sing-box-${{ needs.resolve_source.outputs.core_version }}-android-${{ matrix.arch }}"
           mkdir -p "$DIR_NAME"
           cp ../LICENSE "$DIR_NAME/"
           cp sing-box "$DIR_NAME/"
@@ -591,13 +662,13 @@ jobs:
       - name: Checkout sing-box
         uses: actions/checkout@v6
         with:
-          repository: reF1nd/sing-box
+          repository: ${{ needs.resolve_source.outputs.core_repository }}
           ref: ${{ needs.resolve_source.outputs.source_sha }}
           path: sing-box
           fetch-depth: 1
 
       - name: Set build tag
-        run: git -C sing-box tag -f "v${{ github.event.inputs.version }}" "${{ needs.resolve_source.outputs.source_sha }}"
+        run: git -C sing-box tag -f "v${{ needs.resolve_source.outputs.core_version }}" "${{ needs.resolve_source.outputs.source_sha }}"
 
       - name: Setup Go
         uses: actions/setup-go@v6
@@ -662,19 +733,19 @@ jobs:
       - name: Checkout sing-box
         uses: actions/checkout@v6
         with:
-          repository: reF1nd/sing-box
+          repository: ${{ needs.resolve_source.outputs.core_repository }}
           ref: ${{ needs.resolve_source.outputs.source_sha }}
           path: sing-box
           fetch-depth: 1
 
       - name: Set build tag
-        run: git -C sing-box tag -f "v${{ github.event.inputs.version }}" "${{ needs.resolve_source.outputs.source_sha }}"
+        run: git -C sing-box tag -f "v${{ needs.resolve_source.outputs.core_version }}" "${{ needs.resolve_source.outputs.source_sha }}"
 
       - name: Checkout sing-box-for-android
         uses: actions/checkout@v6
         with:
-          repository: reF1nd/sing-box-for-android
-          ref: reF1nd-oldstable
+          repository: ${{ needs.resolve_source.outputs.android_gui_repository }}
+          ref: ${{ needs.resolve_source.outputs.android_gui_sha }}
           path: sing-box-for-android
 
       - name: Checkout submodule recursive
@@ -717,13 +788,21 @@ jobs:
         with:
           cache-provider: basic
 
-      - name: Update VERSION_NAME for temporary tag
-        if: github.event.inputs.commit_hash != ''
+      - name: Update Android application version
         run: |
           set -euo pipefail
           file="sing-box-for-android/version.properties"
           sed -i "s/^VERSION_NAME=.*/VERSION_NAME=${{ github.event.inputs.version }}/" "$file"
           grep '^VERSION_NAME=' "$file"
+
+      - name: Checkout release CI scripts
+        uses: actions/checkout@v6
+        with:
+          path: release-ci
+          fetch-depth: 1
+
+      - name: Rewrite Android package identifiers
+        run: bash release-ci/.github/scripts/rewrite-gui-package-ids.sh android sing-box-for-android "${{ github.repository }}"
 
       - name: Read version code from source
         run: |
@@ -831,7 +910,14 @@ jobs:
             --arg head_branch "${{ github.ref_name }}" \
             --arg head_sha "${{ github.sha }}" \
             --arg version "${{ inputs.version }}" \
+            --arg core_base_version "${{ inputs.core_base_version }}" \
+            --arg core_version "${{ needs.resolve_source.outputs.core_version }}" \
+            --arg core_repository "${{ needs.resolve_source.outputs.core_repository }}" \
+            --arg core_ref "${{ needs.resolve_source.outputs.core_ref }}" \
             --arg source_sha "${{ needs.resolve_source.outputs.source_sha }}" \
+            --arg android_gui_repository "${{ needs.resolve_source.outputs.android_gui_repository }}" \
+            --arg android_gui_ref "${{ needs.resolve_source.outputs.android_gui_ref }}" \
+            --arg android_gui_sha "${{ needs.resolve_source.outputs.android_gui_sha }}" \
             --arg built_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --argjson run_id "${{ github.run_id }}" \
             --argjson run_attempt "${{ github.run_attempt }}" \
@@ -849,7 +935,23 @@ jobs:
               run_id: $run_id,
               run_attempt: $run_attempt,
               version: $version,
+              core_base_version: $core_base_version,
+              core_version: $core_version,
+              source_repository: $core_repository,
+              source_ref: $core_ref,
               source_sha: $source_sha,
+              sources: {
+                core: {
+                  repository: $core_repository,
+                  ref: $core_ref,
+                  sha: $source_sha
+                },
+                android_gui: {
+                  repository: $android_gui_repository,
+                  ref: $android_gui_ref,
+                  sha: $android_gui_sha
+                }
+              },
               built_at: $built_at,
               build: {
                 cli: $build_cli,
