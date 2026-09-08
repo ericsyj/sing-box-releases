@@ -1,0 +1,7 @@
+# actionlint configuration.
+# Register newer GitHub-hosted runner labels that actionlint's bundled
+# database does not yet know about, so real problems are not hidden behind
+# false-positive "unknown runner label" errors.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
