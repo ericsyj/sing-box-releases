@@ -1,0 +1,4 @@
+{
+  "name": "sing-box release pipeline",
+  "install": "bash .cursor/install.sh"
+}
