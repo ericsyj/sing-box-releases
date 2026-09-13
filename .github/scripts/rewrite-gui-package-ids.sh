@@ -40,6 +40,20 @@ replace_in_files() {
   done
 }
 
+# gofmt realigns const blocks when new identifiers are added, so do not match
+# a fixed number of spaces around '='.
+require_assigned_string() {
+  local root="$1"
+  local name="$2"
+  local value="$3"
+  local escaped
+  escaped="$(printf '%s' "$value" | sed 's/[][().^$?*+|{}\\]/\\&/g')"
+  if ! grep -R -E -q -- "${name}[[:space:]]*=[[:space:]]*\"${escaped}\"" "$root"; then
+    echo "failed to rewrite core ${name}" >&2
+    exit 1
+  fi
+}
+
 set_releases_url() {
   local file="$1"
   if [[ -z "$RELEASES_REPO" ]]; then
@@ -212,21 +226,12 @@ rewrite_core() {
     exit 1
   fi
 
-  if ! grep -R -F -q -- "applicationExecutableName = \"sing-box-${TO_BRAND}.exe\"" "$boxdd"; then
-    echo "failed to rewrite core applicationExecutableName" >&2
-    exit 1
-  fi
-  if ! grep -R -F -q -- "serviceName = \"sing-box-daemon-${TO_BRAND}\"" "$boxdd"; then
-    echo "failed to rewrite core serviceName" >&2
-    exit 1
-  fi
-  if ! grep -R -F -q -- "updateProductName      = \"sing-box-${TO_BRAND}\"" "$boxdd"; then
-    echo "failed to rewrite core updateProductName" >&2
-    exit 1
-  fi
-  if ! grep -R -F -q -- "policyKitTakeOverAction       = \"io.${TO_BRAND}.sfl.take-over-service\"" "$boxdd"; then
-    echo "failed to rewrite core policyKitTakeOverAction" >&2
-    exit 1
+  require_assigned_string "$boxdd" applicationExecutableName "sing-box-${TO_BRAND}.exe"
+  require_assigned_string "$boxdd" serviceName "sing-box-daemon-${TO_BRAND}"
+  require_assigned_string "$boxdd" updateProductName "sing-box-${TO_BRAND}"
+  require_assigned_string "$boxdd" policyKitTakeOverAction "io.${TO_BRAND}.sfl.take-over-service"
+  if grep -R -E -q -- 'policyKitSetInsecureModeAction[[:space:]]*=' "$boxdd"; then
+    require_assigned_string "$boxdd" policyKitSetInsecureModeAction "io.${TO_BRAND}.sfl.set-insecure-mode"
   fi
 
   echo "Core application executable: sing-box-${TO_BRAND}.exe"
