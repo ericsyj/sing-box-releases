@@ -24,11 +24,6 @@ on:
           - pre-release
           - release
         default: pre-release
-      update_sing_box:
-        description: 'Force-update the sing-box tag and channel branch'
-        required: false
-        type: boolean
-        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -56,17 +51,14 @@ jobs:
           case "$CHANNEL" in
             testing)
               workflow='.github/workflows/build-testing.yml'
-              target_branch='reF1nd-testing'
               build_info_file='testing-build-info.json'
               ;;
             stable)
               workflow='.github/workflows/build-stable.yml'
-              target_branch='reF1nd-stable'
               build_info_file='stable-build-info.json'
               ;;
             oldstable)
               workflow='.github/workflows/build-oldstable.yml'
-              target_branch='reF1nd-oldstable'
               build_info_file='oldstable-build-info.json'
               ;;
             *)
@@ -76,7 +68,6 @@ jobs:
           esac
           {
             echo "workflow=$workflow"
-            echo "target_branch=$target_branch"
             echo "build_info_file=$build_info_file"
           } >> "$GITHUB_OUTPUT"
 
@@ -149,6 +140,21 @@ jobs:
               and .run_id == $run_id
               and (.version | test("^[0-9A-Za-z][0-9A-Za-z.+-]*$"))
               and (.source_sha | test("^[0-9a-f]{40}$"))
+              and ((($channel == "oldstable") and .core_base_version == null) or
+                (((.core_base_version // "") | test("^[0-9A-Za-z][0-9A-Za-z.+-]*$"))
+                  and .core_version == (.core_base_version + "-" + (.source_sha[0:9]))
+                  and ((.source_repository // "") | test("^[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+$"))
+                  and ((.source_ref // "") | type == "string" and length > 0)
+                  and .sources.core.repository == .source_repository
+                  and .sources.core.ref == .source_ref
+                  and .sources.core.sha == .source_sha
+                  and ((.sources.android_gui.repository // "") | test("^[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+$"))
+                  and ((.sources.android_gui.ref // "") | type == "string" and length > 0)
+                  and ((.sources.android_gui.sha // "") | test("^[0-9a-f]{40}$"))
+                  and (($channel == "oldstable") or
+                    (((.sources.desktop_gui.repository // "") | test("^[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+$"))
+                      and ((.sources.desktop_gui.ref // "") | type == "string" and length > 0)
+                      and ((.sources.desktop_gui.sha // "") | test("^[0-9a-f]{40}$"))))))
               and (.built_at | type == "string" and length > 0)
               and (.build.cli | type == "boolean")
               and (.build.android_gui | type == "boolean")
@@ -168,6 +174,11 @@ jobs:
 
           {
             echo "version=$(jq -r '.version' "$manifest")"
+            echo "core_base_version=$(jq -r '.core_base_version // empty' "$manifest")"
+            echo "core_version=$(jq -r '.core_version // .version' "$manifest")"
+            echo "source_repository=$(jq -r --arg channel "$CHANNEL" \
+              '.source_repository // (if $channel == "oldstable" then "reF1nd/sing-box" else empty end)' "$manifest")"
+            echo "source_ref=$(jq -r '.source_ref // .source_branch // empty' "$manifest")"
             echo "source_sha=$(jq -r '.source_sha' "$manifest")"
             echo "built_at=$(jq -r '.built_at' "$manifest")"
             echo "build_cli=$(jq -r '.build.cli' "$manifest")"
@@ -241,56 +252,13 @@ jobs:
 
           diff -u expected-artifacts.json actual-artifacts.json
 
-      - name: Check sing-box repository token
-        if: inputs.update_sing_box
-        env:
-          SING_BOX_REPOSITORY_TOKEN: ${{ secrets.SING_BOX_REPOSITORY_TOKEN }}
-        run: |
-          if [[ -z "$SING_BOX_REPOSITORY_TOKEN" ]]; then
-            echo "SING_BOX_REPOSITORY_TOKEN is required to update reF1nd/sing-box" >&2
-            exit 1
-          fi
-
-      - name: Checkout sing-box source
-        if: inputs.update_sing_box
-        uses: actions/checkout@v6
-        with:
-          repository: reF1nd/sing-box
-          ref: ${{ steps.manifest.outputs.source_sha }}
-          token: ${{ secrets.SING_BOX_REPOSITORY_TOKEN }}
-          path: sing-box
-          fetch-depth: 0
-
-      - name: Push sing-box tag and channel branch
-        if: inputs.update_sing_box
-        env:
-          VERSION: ${{ steps.manifest.outputs.version }}
-          SOURCE_SHA: ${{ steps.manifest.outputs.source_sha }}
-          TARGET_BRANCH: ${{ steps.channel.outputs.target_branch }}
-        run: |
-          set -euo pipefail
-          checked_out_sha=$(git -C sing-box rev-parse HEAD)
-          if [[ "$checked_out_sha" != "$SOURCE_SHA" ]]; then
-            echo "sing-box checkout mismatch: expected $SOURCE_SHA, got $checked_out_sha" >&2
-            exit 1
-          fi
-
-          tag="v${VERSION}"
-          git -C sing-box tag -f "$tag" "$SOURCE_SHA"
-          git -C sing-box push --atomic --force origin \
-            "refs/tags/${tag}:refs/tags/${tag}" \
-            "refs/tags/${tag}:refs/heads/${TARGET_BRANCH}"
-
-          remote_tag=$(git -C sing-box ls-remote origin "refs/tags/${tag}" | awk '{print $1}')
-          remote_branch=$(git -C sing-box ls-remote origin "refs/heads/${TARGET_BRANCH}" | awk '{print $1}')
-          if [[ "$remote_tag" != "$SOURCE_SHA" || "$remote_branch" != "$SOURCE_SHA" ]]; then
-            echo "failed to verify sing-box tag or ${TARGET_BRANCH} branch" >&2
-            exit 1
-          fi
-
       - name: Generate build info and release notes
         env:
           VERSION: ${{ steps.manifest.outputs.version }}
+          CORE_BASE_VERSION: ${{ steps.manifest.outputs.core_base_version }}
+          CORE_VERSION: ${{ steps.manifest.outputs.core_version }}
+          SOURCE_REPOSITORY: ${{ steps.manifest.outputs.source_repository }}
+          SOURCE_REF: ${{ steps.manifest.outputs.source_ref }}
           SOURCE_SHA: ${{ steps.manifest.outputs.source_sha }}
           BUILT_AT: ${{ steps.manifest.outputs.built_at }}
           BUILD_RUN_ID: ${{ inputs.build_run_id }}
@@ -300,22 +268,40 @@ jobs:
           set -euo pipefail
           jq \
             --arg version "$VERSION" \
+            --arg core_base_version "$CORE_BASE_VERSION" \
+            --arg core_version "$CORE_VERSION" \
+            --arg source_repository "$SOURCE_REPOSITORY" \
+            --arg source_ref "$SOURCE_REF" \
             --arg built_at "$BUILT_AT" \
             --arg run_id "$BUILD_RUN_ID" \
             --arg source_sha "$SOURCE_SHA" \
-            '.version = $version | .built_at = $built_at | .run_id = $run_id | .source_sha = $source_sha' \
+            '.version = $version
+              | if $core_base_version == "" then del(.core_base_version) else .core_base_version = $core_base_version end
+              | .core_version = $core_version
+              | .source_repository = $source_repository
+              | del(.source_branch)
+              | if $source_ref == "" then del(.source_ref) else .source_ref = $source_ref end
+              | .built_at = $built_at
+              | .run_id = $run_id
+              | .source_sha = $source_sha' \
             "$BUILD_INFO_FILE" > updated-build-info.json
           mv updated-build-info.json "$BUILD_INFO_FILE"
 
           published_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           {
-            echo "## sing-box v${VERSION}"
+            echo "## Release v${VERSION}"
             echo ""
             echo "| Field | Value |"
             echo "|---|---|"
             echo "| Channel | \`${CHANNEL}\` |"
-            echo "| Version | \`${VERSION}\` |"
-            echo "| sing-box Commit | [\`${SOURCE_SHA}\`](https://github.com/reF1nd/sing-box/commit/${SOURCE_SHA}) |"
+            echo "| Release / GUI Version | \`${VERSION}\` |"
+            echo "| sing-box Core Version | \`${CORE_VERSION}\` |"
+            echo "| sing-box Commit | [\`${SOURCE_SHA}\`](https://github.com/${SOURCE_REPOSITORY}/commit/${SOURCE_SHA}) |"
+            if [[ -n "$SOURCE_REF" ]]; then
+              echo "| sing-box Source | [\`${SOURCE_REPOSITORY}:${SOURCE_REF}\`](https://github.com/${SOURCE_REPOSITORY}/tree/${SOURCE_REF}) |"
+            else
+              echo "| sing-box Source | [\`${SOURCE_REPOSITORY}\`](https://github.com/${SOURCE_REPOSITORY}) |"
+            fi
             echo "| Built At | ${BUILT_AT} |"
             echo "| Published At | ${published_at} |"
             echo "| Build Run ID | [${BUILD_RUN_ID}](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${BUILD_RUN_ID}) |"
@@ -369,112 +355,3 @@ jobs:
           files: release_files/*
         env:
           GITHUB_TOKEN: ${{ github.token }}
-
-      - name: Organize release files
-        run: |
-          mkdir -p release_files/sfa release_files/sfw release_files/sfl release_files/android release_files/darwin release_files/windows release_files/others
-          mv release_files/SFA-*.apk release_files/sfa/ 2>/dev/null || true
-          mv release_files/SFW-*.exe release_files/sfw/ 2>/dev/null || true
-          mv release_files/SFL-* release_files/sfl/ 2>/dev/null || true
-          mv release_files/sing-box-*-android-* release_files/android/ 2>/dev/null || true
-          mv release_files/sing-box-*-darwin-* release_files/darwin/ 2>/dev/null || true
-          mv release_files/sing-box-*-windows-* release_files/windows/ 2>/dev/null || true
-          mv release_files/sing-box-* release_files/others/ 2>/dev/null || true
-
-      - name: Post SFA to channel
-        if: steps.manifest.outputs.build_android_gui == 'true'
-        uses: xireiki/channel-post@v2
-        with:
-          chat_id: ${{ secrets.CHAT_ID }}
-          bot_token: ${{ secrets.BOT_TOKEN }}
-          path: release_files/sfa/*
-          context: "#${{ inputs.channel }}\nSFA-${{ steps.manifest.outputs.version }}"
-          parse_mode: HTML
-          large_file: true
-          api_id: ${{ secrets.API_ID }}
-          api_hash: ${{ secrets.API_HASH }}
-          method: sendFile
-
-      - name: Post SFW to channel
-        if: inputs.channel != 'oldstable' && steps.manifest.outputs.build_windows_gui == 'true'
-        uses: xireiki/channel-post@v2
-        with:
-          chat_id: ${{ secrets.CHAT_ID }}
-          bot_token: ${{ secrets.BOT_TOKEN }}
-          path: release_files/sfw/*
-          context: "#${{ inputs.channel }}\nSFW-${{ steps.manifest.outputs.version }}"
-          parse_mode: HTML
-          large_file: true
-          api_id: ${{ secrets.API_ID }}
-          api_hash: ${{ secrets.API_HASH }}
-          method: sendFile
-
-      - name: Post SFL to channel
-        if: inputs.channel != 'oldstable' && steps.manifest.outputs.build_linux_gui == 'true'
-        uses: xireiki/channel-post@v2
-        with:
-          chat_id: ${{ secrets.CHAT_ID }}
-          bot_token: ${{ secrets.BOT_TOKEN }}
-          path: release_files/sfl/*
-          context: "#${{ inputs.channel }}\nSFL-${{ steps.manifest.outputs.version }}"
-          parse_mode: HTML
-          large_file: true
-          api_id: ${{ secrets.API_ID }}
-          api_hash: ${{ secrets.API_HASH }}
-          method: sendFile
-
-      - name: Post sing-box Android CLI to channel
-        if: steps.manifest.outputs.build_cli == 'true'
-        uses: xireiki/channel-post@v2
-        with:
-          chat_id: ${{ secrets.CHAT_ID }}
-          bot_token: ${{ secrets.BOT_TOKEN }}
-          path: release_files/android/*
-          context: "#${{ inputs.channel }}\nsing-box-${{ steps.manifest.outputs.version }}-android"
-          parse_mode: HTML
-          large_file: true
-          api_id: ${{ secrets.API_ID }}
-          api_hash: ${{ secrets.API_HASH }}
-          method: sendFile
-
-      - name: Post sing-box Darwin CLI to channel
-        if: steps.manifest.outputs.build_cli == 'true'
-        uses: xireiki/channel-post@v2
-        with:
-          chat_id: ${{ secrets.CHAT_ID }}
-          bot_token: ${{ secrets.BOT_TOKEN }}
-          path: release_files/darwin/*
-          context: "#${{ inputs.channel }}\nsing-box-${{ steps.manifest.outputs.version }}-darwin"
-          parse_mode: HTML
-          large_file: true
-          api_id: ${{ secrets.API_ID }}
-          api_hash: ${{ secrets.API_HASH }}
-          method: sendFile
-
-      - name: Post sing-box Windows CLI to channel
-        if: steps.manifest.outputs.build_cli == 'true'
-        uses: xireiki/channel-post@v2
-        with:
-          chat_id: ${{ secrets.CHAT_ID }}
-          bot_token: ${{ secrets.BOT_TOKEN }}
-          path: release_files/windows/*
-          context: "#${{ inputs.channel }}\nsing-box-${{ steps.manifest.outputs.version }}-windows"
-          parse_mode: HTML
-          large_file: true
-          api_id: ${{ secrets.API_ID }}
-          api_hash: ${{ secrets.API_HASH }}
-          method: sendFile
-
-      - name: Post sing-box Linux CLI to channel
-        if: steps.manifest.outputs.build_cli == 'true'
-        uses: xireiki/channel-post@v2
-        with:
-          chat_id: ${{ secrets.CHAT_ID }}
-          bot_token: ${{ secrets.BOT_TOKEN }}
-          path: release_files/others/*
-          context: "#${{ inputs.channel }}\nsing-box-${{ steps.manifest.outputs.version }}-linux"
-          parse_mode: HTML
-          large_file: true
-          api_id: ${{ secrets.API_ID }}
-          api_hash: ${{ secrets.API_HASH }}
-          method: sendFile
