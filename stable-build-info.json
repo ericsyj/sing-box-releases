@@ -1,10 +1,10 @@
 {
-  "version": "1.14.0-Erics.1",
-  "source_sha": "d8d1f8a9aeccbd5ebf50dbb7d1badd63dfbe8358",
-  "built_at": "2026-09-13T17:57:55Z",
-  "run_id": "34772181947",
-  "core_base_version": "1.14.0-Erics.1",
-  "core_version": "1.14.0-Erics.1-d8d1f8a9a",
-  "source_repository": "reF1nd/sing-box",
-  "source_ref": "reF1nd-stable-next"
+  "version": "1.14.1-Erics",
+  "source_sha": "15f58e0fb77ac917de7fd1a50f0362cc5ebe3e71",
+  "built_at": "2026-09-17T07:10:39Z",
+  "run_id": "35191423406",
+  "core_base_version": "1.14.1-Erics",
+  "core_version": "1.14.1-Erics-15f58e0fb",
+  "source_repository": "ericsyj/sing-box",
+  "source_ref": "main-next-pro"
 }
