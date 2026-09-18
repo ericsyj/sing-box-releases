@@ -1,10 +1,10 @@
 {
-  "version": "1.15.0-alpha.5-Erics",
-  "source_sha": "99cb24452aa31484d07da076f187e4d4a2646e2f",
-  "built_at": "2026-09-17T09:56:31Z",
-  "run_id": "35206321327",
-  "core_base_version": "1.15.0-alpha.5-Erics",
-  "core_version": "1.15.0-alpha.5-Erics-99cb24452",
+  "version": "1.15.0-alpha.6-Erics",
+  "source_sha": "ee6fed8a6b5017fc2ac08052857deb473e9efa1f",
+  "built_at": "2026-09-18T01:21:43Z",
+  "run_id": "35294013653",
+  "core_base_version": "1.15.0-alpha.6-Erics",
+  "core_version": "1.15.0-alpha.6-Erics-ee6fed8a6",
   "source_repository": "ericsyj/sing-box",
   "source_ref": "dev-next-pro"
 }
