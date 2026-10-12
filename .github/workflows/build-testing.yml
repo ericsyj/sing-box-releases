@@ -1084,12 +1084,15 @@ jobs:
           - desktop_arch: x64
             go_arch: amd64
             go_arm: ''
+            rust_target: x86_64-unknown-linux-gnu
           - desktop_arch: arm64
             go_arch: arm64
             go_arm: ''
+            rust_target: aarch64-unknown-linux-gnu
           - desktop_arch: armv7l
             go_arch: arm
             go_arm: '7'
+            rust_target: armv7-unknown-linux-gnueabihf
     steps:
       - name: Setup Go
         uses: actions/setup-go@v6
@@ -1198,6 +1201,26 @@ jobs:
           sudo apt-get update || true
           sudo apt-get install -y debsigs debsig-verify libarchive-tools rpm zstd
           echo '%_rpmformat 4' > "$HOME/.rpmmacros"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Cache Wayland menu module
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            sing-box-for-desktop/bin/wayland-menu-toolchain
+          key: wayland-menu-${{ matrix.rust_target }}-${{ hashFiles('sing-box-for-desktop/native/wayland-menu/Cargo.lock') }}
+          restore-keys: wayland-menu-${{ matrix.rust_target }}-
 
       - name: Install dependencies
         run: pnpm -C sing-box-for-desktop install
