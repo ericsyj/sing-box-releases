@@ -155,6 +155,16 @@ rewrite_desktop() {
     exit 1
   fi
 
+  # Official desktop dev adds files such as the systemd preset. They are not in
+  # the required list because stable trees may not have them, but any brand
+  # string they contain must be rewritten before the leftover check.
+  local extra
+  while IFS= read -r -d '' extra; do
+    if grep -F -q -- "$FROM_BRAND" "$extra"; then
+      replace_literal "$extra" "$FROM_BRAND" "$TO_BRAND"
+    fi
+  done < <(find "$ROOT/build" -type f -print0)
+
   local leftovers
   leftovers="$(
     grep -R -F -n --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=out --exclude-dir=release \
